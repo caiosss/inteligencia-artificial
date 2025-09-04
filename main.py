@@ -126,6 +126,13 @@ plt.show()
 # só há uma queda quando os valores chegam próximos de 12 para x e 500 para y.
 
 
+
+
+
+
+
+
+
 ## ==== A PLOTAGEM A SEGUIR FOI FEITA PELO GPT, QUISER TESTAR COMENTA A DE CIMA E RODA ESSA ABAIXO ==== ##
 
 ## eu não entendi muito bem essa plotagem e nem sei se ele pede esses 3 gráficos, mas tá aí
