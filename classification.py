@@ -123,16 +123,18 @@ for lam in lambdas:
     acc = np.mean(preds == np.argmax(Y, axis=1))
     print(f"Acurácia Gaussiano Regularizado (lambda={lam}):", acc)
 
-# Bayes Ingênuo (cov diagonal)
-# preds = []
-# for x in X:
-#     probs = []                                   <<<ERRO REFERENTE A UMA DIVISÃO POR ZERO!!>>>
-#     for c in range(C):
-#         variancias = np.var(X[Y[:,c]==1], axis=0)
-#         mean = medias[c]
-#         prob = np.prod(1/np.sqrt(2*np.pi*variancias) * 
-#                        np.exp(-(x-mean)**2/(2*variancias)))
-#         probs.append(prob)
-#     preds.append(np.argmax(probs))
-# acuracia_nb = np.mean(preds == np.argmax(Y, axis=1))
-# print("Acurácia Bayes Ingênuo:", acuracia_nb)
+#Bayes Ingênuo (cov diagonal)
+#adicionando epsilon para evitar divisões por zero
+eps = 1e-6
+preds = []
+for x in X:
+    probs = []                                  # <<<ERRO REFERENTE A UMA DIVISÃO POR ZERO!!>>>
+    for c in range(C):                          # Tal erro era gerado por sensores com variância nula
+        variancias = np.var(X[Y[:,c]==1], axis=0) + eps
+        mean = medias[c]
+        prob = np.prod(1/np.sqrt(2*np.pi*variancias) * 
+                       np.exp(-(x-mean)**2/(2*variancias)))
+        probs.append(prob)
+    preds.append(np.argmax(probs))
+acuracia_nb = np.mean(preds == np.argmax(Y, axis=1))
+print("Acurácia Bayes Ingênuo:", acuracia_nb)
