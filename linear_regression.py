@@ -3,7 +3,6 @@ import matplotlib.pyplot as plt
 from numpy.linalg import pinv
 
 
-def class LinearRegression:
 
 
 data = np.loadtxt('aerogerador.dat')
