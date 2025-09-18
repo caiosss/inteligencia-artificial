@@ -15,52 +15,26 @@ class ClassificationIA:
         self.data = data
         self.nomes_classes = nomes_classes
         self.cores = cores
-        
-        # Extrai metadados importantes do dataset
         self.classes = np.unique(self.data[:, -1])
-        self.N = self.data.shape[0]  # número de amostras
-        self.C = len(self.classes)   # número de classes
-        self.p = self.data.shape[1] - 1  # número de características (sensores)
-
-        # Prepara as matrizes de características (X) e rótulos (Y)
-        self._prepare_data()
-
-    def _prepare_data(self):
-        """
-        Prepara as matrizes X (características) e Y (rótulos one-hot)
-        a partir do conjunto de dados bruto.
-        """
-        self.X = np.empty((0, self.p))
-        self.Y = np.empty((0, self.C))
-
-        for i, classe in enumerate(self.classes):
-            X_classe = self.data[self.data[:, -1] == classe, 0:-1]
-            
-            # Criação de rótulos no formato one-hot
-            y_rotulo = np.zeros((X_classe.shape[0], self.C))
-            y_rotulo[:, i] = 1
-
-            self.X = np.vstack((self.X, X_classe))
-            self.Y = np.vstack((self.Y, y_rotulo))
+        self.N = self.data.shape[0]
+        self.C = len(self.classes)
+        self.p = self.data.shape[1] - 1
         
-        # Prepara matriz para o modelo MQO (adiciona coluna de 1s)
-        self.X_mqo = np.hstack((np.ones((self.N, 1)), self.X))
-        
-        # Versões para modelos Bayesianos (formato transposto)
-        self.X_bayes = self.X.T
-        self.Y_bayes = self.Y.T
-        
-        # Rótulos de classe verdadeiros (não one-hot) para cálculo de acurácia
-        self.y_true = np.argmax(self.Y, axis=1)
+        # Mapeamento dos rótulos de 1-5 para 0-4
+        self.mapeamento_rotulos = {cls: i for i, cls in enumerate(self.classes)}
 
     def plot_data(self):
         """
         Gera um gráfico de dispersão dos dados, colorindo cada classe.
         """
+        X = self.data[:, 0:self.p]
+        y = self.data[:, -1]
+        
+        plt.figure(figsize=(8, 6))
         for i, classe in enumerate(self.classes):
-            X_classe = self.data[self.data[:, -1] == classe, 0:-1]
+            X_classe = X[y == classe]
             plt.scatter(X_classe[:, 0], X_classe[:, 1],
-                        c=self.cores[i], label=self.nomes_classes[i], edgecolors='k')
+                        c=self.cores[i], label=self.nomes_classes[i], edgecolors='k', alpha=0.7)
         
         plt.xlabel("Sensor 1 (Corrugador do Supercílio)")
         plt.ylabel("Sensor 2 (Zigomático Maior)")
@@ -69,105 +43,172 @@ class ClassificationIA:
         plt.grid(True)
         plt.show()
 
-    def run_mqo_classification(self):
-        """
-        Treina e avalia o classificador de Mínimos Quadrados Ordinários (MQO).
-        """
-        beta_mqo = pinv(self.X_mqo.T @ self.X_mqo) @ self.X_mqo.T @ self.Y
-        Y_pred_mqo = self.X_mqo @ beta_mqo
-        y_pred_classes = np.argmax(Y_pred_mqo, axis=1)
-        
-        acuracia_mqo = np.mean(y_pred_classes == self.y_true)
-        print(f"Acurácia MQO: {acuracia_mqo:.4f}")
-        return acuracia_mqo
-
-    def _calc_media_por_classe(self):
-        """Calcula as médias de características para cada classe."""
-        medias = [np.mean(self.X[self.Y[:, c] == 1], axis=0) for c in range(self.C)]
+    def _calc_media(self, X_data, Y_one_hot):
+        """Calcula as médias por classe para um subconjunto de dados."""
+        medias = []
+        for c in range(self.C):
+            Xc = X_data[Y_one_hot[:, c] == 1]
+            if Xc.size > 0:
+                medias.append(np.mean(Xc, axis=0))
+            else:
+                medias.append(np.zeros(X_data.shape[1]))
         return np.array(medias)
 
-    def _calc_covariancia_por_classe(self):
-        """Calcula as matrizes de covariância para cada classe."""
-        covs = [np.cov(self.X[self.Y[:, c] == 1].T) for c in range(self.C)]
+    def _calc_covariancia(self, X_data, Y_one_hot):
+        """Calcula as covariâncias por classe para um subconjunto de dados."""
+        covs = []
+        for c in range(self.C):
+            Xc = X_data[Y_one_hot[:, c] == 1]
+            if Xc.shape[0] > 1:
+                covs.append(np.cov(Xc.T))
+            else:
+                covs.append(np.eye(self.p) * 1e-6)
         return covs
 
-    def _gaussiana(self, x, mean, cov, eps=1e-6):
-        """
-        Calcula a densidade de probabilidade de uma Gaussiana multivariada.
-        Adiciona regularização para evitar matrizes singulares.
-        """
+    def _calc_variancia(self, X_data, Y_one_hot):
+        """Calcula as variâncias por classe para Naive Bayes."""
+        variancias = []
+        for c in range(self.C):
+            Xc = X_data[Y_one_hot[:, c] == 1]
+            if Xc.size > 0:
+                variancias.append(np.var(Xc, axis=0))
+            else:
+                variancias.append(np.ones(self.p) * 1e-6)
+        return np.array(variancias)
+
+    def _gaussiana_pdf(self, x, mean, cov, eps=1e-6):
+        """Calcula a densidade de probabilidade Gaussiana multivariada."""
         d = len(mean)
         cov_reg = cov + eps * np.eye(d)
-        inv_cov = np.linalg.inv(cov_reg)
-        det_cov = np.linalg.det(cov_reg)
-        norm = 1.0 / np.sqrt(((2 * np.pi) ** d) * det_cov)
-        diff = x - mean
-        return norm * np.exp(-0.5 * diff @ inv_cov @ diff.T)
+        try:
+            inv = np.linalg.inv(cov_reg)
+            det = np.linalg.det(cov_reg)
+            if det <= 0: return 0
+            norm = 1 / np.sqrt((2 * np.pi)**d * det)
+            diff = x - mean
+            return norm * np.exp(-0.5 * diff @ inv @ diff.T)
+        except np.linalg.LinAlgError:
+            return 0
+    
+    def _naive_bayes_pdf(self, x, mean, var, eps=1e-6):
+        """Calcula a densidade de probabilidade para Naive Bayes."""
+        probs = 1.0
+        for j in range(len(x)):
+            sigma_sq = var[j] + eps
+            probs *= (1 / np.sqrt(2 * np.pi * sigma_sq)) * np.exp(-0.5 * ((x[j] - mean[j])**2) / sigma_sq)
+        return probs
 
-    def _predict_gaussian(self, medias, cov_matrix, is_qda=False):
+    def run_monte_carlo(self, R, test_size=0.2):
         """
-        Realiza predições usando um modelo Gaussiano com uma dada matriz de covariância.
+        Executa a validação por Monte Carlo para todos os modelos de classificação.
         """
-        preds = []
-        for x in self.X:
-            if is_qda: # QDA usa uma matriz de covariância por classe
-                probs = [self._gaussiana(x, medias[c], cov_matrix[c]) for c in range(self.C)]
-            else: # Outros modelos usam uma matriz de covariância compartilhada
-                probs = [self._gaussiana(x, medias[c], cov_matrix) for c in range(self.C)]
-            preds.append(np.argmax(probs))
-        return np.array(preds)
-
-    def run_gaussian_classifiers(self):
-        """
-        Executa e avalia vários tipos de classificadores Bayesianos Gaussianos.
-        """
-        print("\n--- Classificadores Gaussianos ---")
-        medias = self._calc_media_por_classe()
-        covs = self._calc_covariancia_por_classe()
-
-        # 1. Tradicional (QDA - Análise Discriminante Quadrática)
-        preds_qda = self._predict_gaussian(medias, covs, is_qda=True)
-        acuracia_qda = np.mean(preds_qda == self.y_true)
-        print(f"Acurácia Gaussiano Tradicional (QDA): {acuracia_qda:.4f}")
-
-        # 2. Covariâncias Iguais (LDA - Análise Discriminante Linear)
-        cov_media = sum(covs) / self.C
-        preds_lda = self._predict_gaussian(medias, cov_media)
-        acuracia_lda = np.mean(preds_lda == self.y_true)
-        print(f"Acurácia Covariâncias Iguais (LDA): {acuracia_lda:.4f}")
-
-        # 3. Matriz Agregada (Covariância ponderada pelo tamanho da classe)
-        cov_agregada = np.zeros((self.p, self.p))
-        for c in range(self.C):
-            Xc = self.X[self.Y[:, c] == 1]
-            cov_agregada += (len(Xc) / self.N) * covs[c]
-        preds_agregada = self._predict_gaussian(medias, cov_agregada)
-        acuracia_agregada = np.mean(preds_agregada == self.y_true)
-        print(f"Acurácia Matriz Agregada: {acuracia_agregada:.4f}")
+        print(f"Iniciando simulação de Monte Carlo com R = {R} rodadas...")
         
-        # 4. Regularizado (combina identidade com matriz agregada)
-        lambdas = [0, 0.25, 0.5, 0.75, 1]
-        print("\n--- Regularização da Matriz Agregada ---")
-        for lam in lambdas:
-            cov_reg = (1 - lam) * cov_agregada + lam * np.eye(self.p)
-            preds_reg = self._predict_gaussian(medias, cov_reg)
-            acc = np.mean(preds_reg == self.y_true)
-            print(f"Acurácia Gaussiano Regularizado (lambda={lam}): {acc:.4f}")
+        acuracias = {
+            "MQO tradicional": [],
+            "Classificador Gaussiano Tradicional": [],
+            "Classificador Gaussiano (Cov. de todo cj. treino)": [],
+            "Classificador Gaussiano (Cov. Agregada)": [],
+            "Classificador de Bayes Ingênuo (Naive Bayes Classifier)": [],
+        }
+        
+        lambdas_reg = [0, 0.25, 0.5, 0.75, 1]
+        
+        # Adiciona as chaves dos modelos regularizados ao dicionário
+        for lam in lambdas_reg:
+             # Troca 'λ' por 'lambda'
+             acuracias[f"Classificador Gaussiano Regularizado (Friedman lambda={lam})"] = []
+        
+        rng = np.random.default_rng(12345)
+        
+        for r in range(R):
+            # Adicionado para exibir o progresso
+            print(f"Executando rodada {r+1}/{R}...")
 
-        # 5. Bayes Ingênuo (Naive Bayes - covariância diagonal)
-        eps = 1e-6
-        preds_nb = []
-        for x in self.X:
-            probs = []
+            # Particionamento dos dados em 80/20
+            idx = np.arange(self.N)
+            rng.shuffle(idx)
+            n_treino = int((1 - test_size) * self.N)
+            idx_treino = idx[:n_treino]
+            idx_teste = idx[n_treino:]
+
+            X_treino = self.data[idx_treino, :-1]
+            y_treino = self.data[idx_treino, -1]
+            X_teste = self.data[idx_teste, :-1]
+            y_teste = self.data[idx_teste, -1]
+
+            # Mapeia os rótulos de 1-5 para 0-4
+            y_treino_map = np.array([self.mapeamento_rotulos[label] for label in y_treino])
+            y_teste_map = np.array([self.mapeamento_rotulos[label] for label in y_teste])
+
+            # Converte rótulos para o formato one-hot-encoding
+            Y_treino_one_hot = np.zeros((X_treino.shape[0], self.C))
+            for i, label in enumerate(y_treino_map):
+                Y_treino_one_hot[i, int(label)] = 1
+            
+            # --- MODELOS DE CLASSIFICAÇÃO ---
+
+            # MQO Tradicional
+            X_mqo_treino = np.hstack((np.ones((X_treino.shape[0], 1)), X_treino))
+            X_mqo_teste = np.hstack((np.ones((X_teste.shape[0], 1)), X_teste))
+            
+            beta_mqo = pinv(X_mqo_treino.T @ X_mqo_treino) @ X_mqo_treino.T @ Y_treino_one_hot
+            Y_pred_mqo = X_mqo_teste @ beta_mqo
+            y_pred_mqo = np.argmax(Y_pred_mqo, axis=1)
+            acuracias["MQO tradicional"].append(np.mean(y_pred_mqo == y_teste_map))
+            
+            # Classificadores Bayesianos
+            medias_treino = self._calc_media(X_treino, Y_treino_one_hot)
+            covs_treino = self._calc_covariancia(X_treino, Y_treino_one_hot)
+            
+            # Gaussiano Tradicional (QDA)
+            preds_qda = [np.argmax([self._gaussiana_pdf(x, medias_treino[c], covs_treino[c]) for c in range(self.C)]) for x in X_teste]
+            acuracias["Classificador Gaussiano Tradicional"].append(np.mean(np.array(preds_qda) == y_teste_map))
+            
+            # Naive Bayes
+            variancias_treino = self._calc_variancia(X_treino, Y_treino_one_hot)
+            preds_nb = [np.argmax([self._naive_bayes_pdf(x, medias_treino[c], variancias_treino[c]) for c in range(self.C)]) for x in X_teste]
+            acuracias["Classificador de Bayes Ingênuo (Naive Bayes Classifier)"].append(np.mean(np.array(preds_nb) == y_teste_map))
+
+            # Gaussiano com Covariâncias Iguais (LDA)
+            cov_media = sum(covs_treino) / self.C
+            preds_lda = [np.argmax([self._gaussiana_pdf(x, medias_treino[c], cov_media) for c in range(self.C)]) for x in X_teste]
+            acuracias["Classificador Gaussiano (Cov. de todo cj. treino)"].append(np.mean(np.array(preds_lda) == y_teste_map))
+
+            # Gaussiano com Matriz Agregada
+            cov_agregada = np.zeros((self.p, self.p))
             for c in range(self.C):
-                Xc = self.X[self.Y[:, c] == 1]
-                variancias = np.var(Xc, axis=0) + eps
-                mean = medias[c]
-                # Calcula a probabilidade produto das probabilidades de cada característica
-                prob_features = 1 / np.sqrt(2 * np.pi * variancias) * np.exp(-(x - mean) ** 2 / (2 * variancias))
-                prob = np.prod(prob_features)
-                probs.append(prob)
-            preds_nb.append(np.argmax(probs))
-        
-        acuracia_nb = np.mean(preds_nb == self.y_true)
-        print(f"\nAcurácia Bayes Ingênuo (Naive Bayes): {acuracia_nb:.4f}")
+                Xc = X_treino[Y_treino_one_hot[:, c] == 1]
+                if Xc.shape[0] > 1:
+                    cov_agregada += (Xc.shape[0] / X_treino.shape[0]) * np.cov(Xc.T)
+                else:
+                    cov_agregada += (Xc.shape[0] / X_treino.shape[0]) * np.eye(self.p) * 1e-6
+            
+            preds_agregada = [np.argmax([self._gaussiana_pdf(x, medias_treino[c], cov_agregada) for c in range(self.C)]) for x in X_teste]
+            acuracias["Classificador Gaussiano (Cov. Agregada)"].append(np.mean(np.array(preds_agregada) == y_teste_map))
+            
+            # Gaussiano Regularizado (Friedman)
+            for lam in lambdas_reg:
+                cov_reg = (1 - lam) * cov_agregada + lam * np.eye(self.p)
+                preds_reg = [np.argmax([self._gaussiana_pdf(x, medias_treino[c], cov_reg) for c in range(self.C)]) for x in X_teste]
+                # Troca 'λ' por 'lambda'
+                acuracias[f"Classificador Gaussiano Regularizado (Friedman lambda={lam})"].append(np.mean(np.array(preds_reg) == y_teste_map))
+
+        # 6. Cálculo e exibição da tabela final
+        print("\n" + "="*90)
+        print(f"Resultados dos Classificadores (Validação Monte Carlo com {R} rodadas):")
+        print("="*90)
+        print(f"{'Modelo':60s} {'Média':>10s} {'Desv.':>10s} {'Maior':>10s} {'Menor':>10s}")
+        print("-" * 90)
+
+        for modelo, accs in acuracias.items():
+            if accs:
+                media = np.mean(accs)
+                desvio = np.std(accs)
+                maior_valor = np.max(accs)
+                menor_valor = np.min(accs)
+                print(f"{modelo:60s} {media:10.4f} {desvio:10.4f} {maior_valor:10.4f} {menor_valor:10.4f}")
+            else:
+                print(f"{modelo:60s} {'-':>10s} {'-':>10s} {'-':>10s} {'-':>10s}")
+
+        print("-" * 90)
